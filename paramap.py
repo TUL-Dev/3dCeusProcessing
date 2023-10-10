@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 import os
 import nibabel as nib
-import matplotlib.pyplot as plt
 
 def data_fit(TIC,normalizer):
     normalizedLogParams, normalizedLogParamCov = curve_fit(lognormal, TIC[:,0], TIC[:,1], p0=(1.0, 0.0,1.0),bounds=([0.,0., 0.], [np.inf, np.inf, np.inf]),method='trf')#p0=(1.0,3.0,0.5,0.1) ,**kwargs
@@ -26,11 +25,8 @@ def data_fit(TIC,normalizer):
     tp = np.exp(mu - (sigma**2))
     pe = np.max(wholeCurve)
 
-    # Filters to block any absurb numbers based on really bad fits. 
-    if tp > 220: tp = 220; 
-    if mtt > 2000: mtt = 2000; 
-    if pe > 1e+07: pe = 1e+07;
-    if auc > 1e+04: auc = 1e+04;
+    # Filters to block any absurd numbers based on really bad fits. 
+    if tp > TIC[-1,0] or mtt > TIC[-1,0]*2 or pe > 1 or auc > 1e+04: raise RuntimeError
     
     params = np.array([auc, pe, tp, mtt])
 
@@ -57,11 +53,12 @@ def generate_TIC(window, mask, times, compression, voxelscale):
     return TICz;
 
 def paramap(img, xmask, ymask, zmask, res, time, tf, compressfactor, windSize_x, windSize_y, windSize_z):
+    # windSize_x = 1; windSize_y = 1; windSize_z = 1
     print('*************************** Starting Parameteric Map *****************************')
     # print('Prep For Loop:');print(str(datetime.now()));
     # start_time = datetime.now()
     #1a. Windowing and image info
-    global windSize, voxelscale, compression, imgshape, timeconst, times, xlist, ylist, zlist, windows, typefit;
+    global windSize, voxelscale, compression, imgshape, timeconst, times, xlist, ylist, zlist, typefit;
     windSize = (windSize_x, windSize_y, windSize_z);
     voxelscale = res[0]*res[1]*res[2];
     compression = compressfactor; 
@@ -117,20 +114,11 @@ def paramap(img, xmask, ymask, zmask, res, time, tf, compressfactor, windSize_x,
                 # Do the fitting
                 try:
                     params, popt, wholecurve = data_fit(cur_TIC,normalizer);
+                    for i in indices:
+                        final_map[i[0],i[1],i[2]] = params
                 except RuntimeError:
-                    params = np.array([-1, np.max(cur_TIC[:,1]), -1, -1])
-
-                for i in indices:
-                    final_map[i[0],i[1],i[2]] = params
-
-                # if first_loop:
-                #     # first_loop_end_time = datetime.now()
-                #     # print("Estimated time till completion:")
-                #     # estimate = (first_loop_end_time.second-start_time.second)
-                #     # estimate = estimate*len(xlist)*len(ylist)*len(zlist)
-                #     # minutes = estimate/60
-                #     # print(str(str(int(minutes))+" minutes, " + str(estimate-(int(minutes)*60))+" seconds"))
-                #     first_loop = False
+                    # params = np.array([-1, np.max(cur_TIC[:,1]), -1, -1])
+                    pass
 
     print('Paraloop ended:')#;print(str(datetime.now()));
     return final_map;
@@ -188,26 +176,27 @@ def main(imPath, maskPath, windowHeightValue, windowWidthValue, windowDepthValue
     maxMtt = 0
     minMtt = 9999
     for i in range(len(pointsPlotted)):
-        if masterParamap[pointsPlotted[i][0], pointsPlotted[i][1],pointsPlotted[i][2]][0] > maxAuc:
-            maxAuc = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][0]
-        if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][0] < minAuc:
-            minAuc = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][0]
-        if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][1] > maxPe:
-            maxPe = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][1]
-        if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][1] < minPe:
-            minPe = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][1] 
-        if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][2] > maxTp:
-            maxTp = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][2]
-        if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][2] < minTp:
-            minTp = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][2]
-        if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][3] > maxMtt:
-            maxMtt = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][3]
-        if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][3] < minMtt:
-            minMtt = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][3]
+        if masterParamap[pointsPlotted[i][0], pointsPlotted[i][1],pointsPlotted[i][2]][3] != 0:
+            if masterParamap[pointsPlotted[i][0], pointsPlotted[i][1],pointsPlotted[i][2]][0] > maxAuc:
+                maxAuc = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][0]
+            if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][0] < minAuc:
+                minAuc = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][0]
+            if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][1] > maxPe:
+                maxPe = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][1]
+            if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][1] < minPe:
+                minPe = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][1] 
+            if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][2] > maxTp:
+                maxTp = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][2]
+            if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][2] < minTp:
+                minTp = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][2]
+            if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][3] > maxMtt:
+                maxMtt = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][3]
+            if masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][3] < minMtt:
+                minMtt = masterParamap[pointsPlotted[i][0],pointsPlotted[i][1],pointsPlotted[i][2]][3]
 
 
     affine = np.eye(4)
-    niiarray = nib.Nifti1Image(masterParamap, affine)
+    niiarray = nib.Nifti1Image(masterParamap, affine, dtype=np.double)
     if os.path.exists(destinationPath):
         os.remove(destinationPath)
     nib.save(niiarray, destinationPath)
