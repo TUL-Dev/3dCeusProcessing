@@ -12,29 +12,69 @@ import sys
 from pathlib import Path
 import os
 import nibabel as nib
+import scipy
 
-def data_fit(TIC,normalizer):
-    normalizedLogParams, normalizedLogParamCov = curve_fit(lognormal, TIC[:,0], TIC[:,1], p0=(1.0, 0.0,1.0),bounds=([0.,0., 0.], [np.inf, np.inf, np.inf]),method='trf')#p0=(1.0,3.0,0.5,0.1) ,**kwargs
-    popt = normalizedLogParams
-
-    auc = popt[0]
-    mu = popt[1]
-    sigma = popt[2]
-    mtt = np.exp(mu+(sigma**2/2))
-    wholeCurve = lognormal(TIC[:,0], auc, mu, sigma)
-    tp = np.exp(mu - (sigma**2))
-    pe = np.max(wholeCurve)
-
-    # Filters to block any absurd numbers based on really bad fits. 
-    if tp > TIC[-1,0] or mtt > TIC[-1,0]*2 or pe > 1 or auc > 1e+04: raise RuntimeError
+def data_fit(TIC, normalizer, timeconst):
+    #Fitting function
+    #Returns the parameters scaled by normalizer
+    #Beware - all fitting - minimization is done with data normalized 0 to 1. 
+    #kwargs = {"max_nfev":5000}
+    popt, pcov = curve_fit(bolus_lognormal, TIC[:,0], TIC[:,1], p0=(1.0,3.0,0.5,0.1),bounds=([0., 0., 0., -1.], [np.inf, np.inf, np.inf, 10.]),method='trf')#p0=(1.0,3.0,0.5,0.1) ,**kwargs
+    popt = np.around(popt, decimals=1);
+    auc = popt[0]; rauc=normalizer*popt[0]; mu=popt[1]; sigma=popt[2]; t0=popt[3]; mtt=timeconst*np.exp(mu+sigma*sigma/2);
+    tp = timeconst*exp(mu-sigma*sigma); wholecurve = bolus_lognormal(TIC[:,0], popt[0], popt[1], popt[2], popt[3]); pe = np.max(wholecurve); # took out pe normalization
+    rt0 = t0;# + tp;
     
-    params = np.array([auc, pe, tp, mtt])
+    # Get error parameters
+    residuals = TIC[:,1] - bolus_lognormal(TIC[:,0], popt[0], mu, sigma, t0);
+    ss_res = np.sum(residuals[~np.isnan(residuals)]**2);# Residual sum of squares
+    ss_tot = np.sum((TIC[:,1]-np.mean(TIC[:,1]))**2);# Total sum of squares
+    r_squared = 1 - (ss_res / ss_tot);# R squared
+    RMSE = (np.sum(residuals[~np.isnan(residuals)]**2)/(residuals[~np.isnan(residuals)].size-2))**0.5;#print('RMSE 1');print(RMSE);# RMSE
+    rMSE = mean_squared_error(TIC[:,1], bolus_lognormal(TIC[:,0], popt[0], mu, sigma, t0))**0.5;#print('RMSE 2');print(rMSE);
 
-    wholeCurve *= normalizer;
-    return params, popt, wholeCurve;
+    # Filters to block any absurb numbers based on really bad fits. 
+    if tp > TIC[-1,0]: tp = TIC[-1,0]
+    if mtt > TIC[-1,0]*2: mtt = TIC[-1,0]*2
+    if rt0 > TIC[-1,0]: rt0 = TIC[-1,0]
+    # if tp > 220: tp = 220; #pe = 0.1; rauc = 0.1; rt0 = 0.1; mtt = 0.1;
+    # if rt0 > 160: rt0 = 160; #pe = 0.1; rauc = 0.1; tp = 0.1; mtt = 0.1;
+    # if mtt > 2000: mtt = 2000; #pe = 0.1; rauc = 0.1; tp = 0.1; rt0 = 0.1;
+    if pe > 1e+07: pe = 1e+07;
+    if auc > 1e+08: auc = 1e+08;
+
+    if RMSE > 0.3: raise RuntimeError
+
+    params = np.array([auc, pe, tp, mtt, rt0]);
+
+    return params, popt, RMSE;
+
+# def data_fit(TIC,normalizer):
+#     normalizedLogParams, normalizedLogParamCov = curve_fit(lognormal, TIC[:,0], TIC[:,1], p0=(1.0, 0.0,1.0),bounds=([0.,0., 0.], [np.inf, np.inf, np.inf]),method='trf')#p0=(1.0,3.0,0.5,0.1) ,**kwargs
+#     popt = normalizedLogParams
+
+#     auc = popt[0]
+#     mu = popt[1]
+#     sigma = popt[2]
+#     mtt = np.exp(mu+(sigma**2/2))
+#     wholeCurve = lognormal(TIC[:,0], auc, mu, sigma)
+#     tp = np.exp(mu - (sigma**2))
+#     pe = np.max(wholeCurve)
+
+#     # Filters to block any absurd numbers based on really bad fits. 
+#     if tp > TIC[-1,0] or mtt > TIC[-1,0]*2 or pe > 1 or auc > 1e+04: raise RuntimeError
+    
+#     params = np.array([auc, pe, tp, mtt])
+
+#     wholeCurve *= normalizer;
+#     return params, popt, wholeCurve;
 
 def lognormal(x, auc, mu, sigma):      
     curve_fit=(auc/(2.5066*sigma*x))*np.exp((-1/2)*(((np.log(x)-mu)/sigma)**2)) 
+    return np.nan_to_num(curve_fit)
+
+def bolus_lognormal(x, auc, mu, sigma, t0):        
+    curve_fit=(auc/(2.5066*sigma*(x-t0)))*np.exp(-1*(((np.log(x-t0)-mu)**2)/(2*sigma*sigma))) 
     return np.nan_to_num(curve_fit)
 
 def generate_TIC(window, mask, times, compression, voxelscale):
@@ -42,7 +82,8 @@ def generate_TIC(window, mask, times, compression, voxelscale):
     bool_mask = np.array(mask, dtype=bool)
     for t in range(0,window.shape[3]):
         tmpwin = window[:,:,:,t];      
-        TIC.append(np.exp(tmpwin[bool_mask]/compression).mean()*voxelscale);
+        TIC.append(np.around(np.exp(tmpwin[bool_mask]/compression).mean()/voxelscale, decimals=1));
+        # TIC.append(np.exp(tmpwin[bool_mask]/compression).mean()*voxelscale);
         # TIC.append(np.around((tmpwin[bool_mask]/compression).mean()*voxelscale, decimals=1)); 
     TICz = np.array([TICtime,TIC]).astype('float64'); TICz = TICz.transpose();
     TICz[:,1]=TICz[:,1]-np.mean(TICz[0:2,1]);#Substract noise in TIC before contrast.
@@ -51,6 +92,20 @@ def generate_TIC(window, mask, times, compression, voxelscale):
     else:
         TICz[:,1]=TICz[:,1]-np.min(TICz[:,1]);
     return TICz;
+
+# def generate_TIC(window, times, compression,voxelscale):
+#     TICtime=[];TIC=[];
+#     for t in range(0,times.shape[0]):
+#         TICtime.append(times[t]); 
+#         tmpwin = window[t,:,:,:];       
+#         TIC.append(np.around(np.exp(tmpwin[~np.isnan(tmpwin)]/compression).mean()/voxelscale, decimals=1));
+#     TICz = np.array([TICtime,TIC]).astype('float64'); TICz = TICz.transpose();
+#     TICz[:,1]=TICz[:,1]-np.mean(TICz[0:2,1]);#Substract noise in TIC before contrast.
+#     if TICz[np.nan_to_num(TICz)<0].any():#make the smallest number in the TIC 0.
+#         TICz[:,1]=TICz[:,1]+np.abs(np.min(TICz[:,1]));
+#     else:
+#         TICz[:,1]=TICz[:,1]-np.min(TICz[:,1]);
+#     return TICz;
 
 def paramap(img, xmask, ymask, zmask, res, time, tf, compressfactor, windSize_x, windSize_y, windSize_z):
     # windSize_x = 1; windSize_y = 1; windSize_z = 1
@@ -75,7 +130,7 @@ def paramap(img, xmask, ymask, zmask, res, time, tf, compressfactor, windSize_x,
     xlist = np.arange(min(xmask), max(xmask)+windSize[0], windSize[0])
     ylist = np.arange(min(ymask), max(ymask)+windSize[1], windSize[1])
     zlist = np.arange(min(zmask), max(zmask)+windSize[2], windSize[2])
-    final_map = np.zeros([img.shape[0], img.shape[1], img.shape[2], 4]).astype(np.double)
+    final_map = np.zeros([img.shape[0], img.shape[1], img.shape[2], 5]).astype(np.double)
     for x_base in range(len(xlist)):
         for y_base in range(len(ylist)):
             for z_base in range(len(zlist)):
@@ -113,7 +168,7 @@ def paramap(img, xmask, ymask, zmask, res, time, tf, compressfactor, windSize_x,
 
                 # Do the fitting
                 try:
-                    params, popt, wholecurve = data_fit(cur_TIC,normalizer);
+                    params, popt, wholecurve = data_fit(cur_TIC,normalizer, timeconst);
                     for i in indices:
                         final_map[i[0],i[1],i[2]] = params
                 except RuntimeError:
@@ -168,13 +223,13 @@ def main(imPath, maskPath, windowHeightValue, windowWidthValue, windowDepthValue
 
     masterParamap = paramap(image, xlist, ylist, zlist, header[1:4], header[4], 'BolusLognormal', compressValue, int(windowHeightValue*header[1]), int(windowWidthValue*header[2]), int(windowDepthValue*header[3]))
     maxAuc = 0
-    minAuc = 9999
+    minAuc = 99999999
     maxPe = 0
-    minPe = 9999
+    minPe = 99999999
     maxTp = 0
-    minTp = 9999
+    minTp = 99999999
     maxMtt = 0
-    minMtt = 9999
+    minMtt = 99999999
     for i in range(len(pointsPlotted)):
         if masterParamap[pointsPlotted[i][0], pointsPlotted[i][1],pointsPlotted[i][2]][3] != 0:
             if masterParamap[pointsPlotted[i][0], pointsPlotted[i][1],pointsPlotted[i][2]][0] > maxAuc:
@@ -204,4 +259,14 @@ def main(imPath, maskPath, windowHeightValue, windowWidthValue, windowDepthValue
     print([minAuc, maxAuc, minPe, maxPe, minTp, maxTp, minMtt, maxMtt])
 
 
-main("/Volumes/CREST Data/David_S_Data/RRX Data/2017D000-m005.nii.gz", "/Volumes/CREST Data/David_S_Data/RRX Data/nifti_segmentation_QUANTUS/2017D000-m005_segmentation.nii.gz", 4, 4, 4, "/Volumes/CREST Data/David_S_Data/RRX Data/nifti_segmentation_QUANTUS/2017D000-m005_paramap.nii.gz")
+# main("/Volumes/CREST Data/David_S_Data/RRX Data/2017D000-m005.nii.gz", "/Volumes/CREST Data/David_S_Data/RRX Data/nifti_segmentation_QUANTUS/2017D000-m005_segmentation.nii.gz", 6, 6, 6, "/Volumes/CREST Data/David_S_Data/RRX Data/nifti_segmentation_QUANTUS/2017D000-m005_paramap_LARGER_VOXELS_NEW.nii.gz")
+# print(sys.argv[1])
+
+
+# Argument 1 --> Absolute path to Original 4D Nifti File
+# Argument 2 --> Absolute path to Segmentation File saved in NIFTI format
+# Argument 3 --> X Voxel Dim (default value 4)
+# Argument 4 --> Y Voxel Dim (default value 4)
+# Argument 5 --> Z Voxel Dim (default value 4)
+# Argument 6 --> Absolute path of paramap destination file (in NIFTI format)
+main(sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5]), sys.argv[6])
