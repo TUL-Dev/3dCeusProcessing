@@ -127,9 +127,13 @@ def paramap(img, xmask, ymask, zmask, res, time, tf, compressfactor, windSize_x,
     timeconst = time;#time/(img.shape[1]+1);
     times = [i*time for i in range(1, img.shape[3]+1)];
 
-    xlist = np.arange(min(xmask), max(xmask)+windSize[0], windSize[0])
-    ylist = np.arange(min(ymask), max(ymask)+windSize[1], windSize[1])
-    zlist = np.arange(min(zmask), max(zmask)+windSize[2], windSize[2])
+    try:
+        xlist = np.arange(min(xmask), max(xmask)+windSize[0], windSize[0])
+        ylist = np.arange(min(ymask), max(ymask)+windSize[1], windSize[1])
+        zlist = np.arange(min(zmask), max(zmask)+windSize[2], windSize[2])
+    except:
+        print("Voxel dimensions too small! Try larger values")
+        exit(1)
     final_map = np.zeros([img.shape[0], img.shape[1], img.shape[2], 5]).astype(np.double)
     for x_base in range(len(xlist)):
         for y_base in range(len(ylist)):
