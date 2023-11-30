@@ -221,7 +221,7 @@ def main(imPath, maskPath, windowHeightValue, windowWidthValue, windowDepthValue
 
     compressValue = 24.9 # hardcoded for now
 
-    masterParamap = paramap(image, xlist, ylist, zlist, header[1:4], header[4], 'BolusLognormal', compressValue, int(windowHeightValue*header[1]), int(windowWidthValue*header[2]), int(windowDepthValue*header[3]))
+    masterParamap = paramap(image, xlist, ylist, zlist, header[1:4], header[4], 'BolusLognormal', compressValue, int(windowHeightValue/header[1]), int(windowWidthValue/header[2]), int(windowDepthValue/header[3]))
     maxAuc = 0
     minAuc = 99999999
     maxPe = 0
@@ -265,8 +265,8 @@ def main(imPath, maskPath, windowHeightValue, windowWidthValue, windowDepthValue
 
 # Argument 1 --> Absolute path to Original 4D Nifti File
 # Argument 2 --> Absolute path to Segmentation File saved in NIFTI format
-# Argument 3 --> X Voxel Dim (default value 4)
-# Argument 4 --> Y Voxel Dim (default value 4)
-# Argument 5 --> Z Voxel Dim (default value 4)
+# Argument 3 --> X Voxel Dim (default value 4) (mm --> assumes pixdim in NIFTI header uses mm units)
+# Argument 4 --> Y Voxel Dim (default value 4) (mm --> assumes pixdim in NIFTI header uses mm units)
+# Argument 5 --> Z Voxel Dim (default value 4) (mm --> assumes pixdim in NIFTI header uses mm units)
 # Argument 6 --> Absolute path of paramap destination file (in NIFTI format)
-main(sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5]), sys.argv[6])
+main(sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5]), sys.argv[6])
